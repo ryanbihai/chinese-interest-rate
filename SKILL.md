@@ -1,6 +1,7 @@
 # 📊 Chinese Interest Rate Monitor
 
 全面追踪中国利率数据，每日检查，有变化立即推送通知。
+**触发词：利率, 存款利率, LPR, 国债收益率, SHIBOR, 利率监测, 今天利率, 利率查询, 利息**
 
 > Monitor China interest rates comprehensively. Daily check with change alerts.
 
