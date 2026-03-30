@@ -1,10 +1,28 @@
 {
   "ownerId": "kn75dvek1dkfz0r0xwdp4xtc2983qg44",
   "slug": "chinese-interest-rate",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "publishedAt": 1774826000000,
   "namespace": "ryanbihai",
-  "changelog": "v3.0: 中英文双语可配置版本，语言可切换（zh/en/bilingual）",
-  "tags": ["finance", "china", "interest-rate", "LPR", "SHIBOR", "bank-deposit", "bond-yield", "mortgage", "monitor", "利率", "贷款市场报价利率", "国债收益率", "房贷利率", "bilingual", "chinese", "english", "china-finance"],
+  "changelog": "v3.1.0: check_rates.py 可独立从网络抓取数据，SKILL.md 明确数据来源机制，解决描述与代码不匹配问题",
+  "tags": [
+    "finance",
+    "china",
+    "interest-rate",
+    "LPR",
+    "SHIBOR",
+    "bank-deposit",
+    "bond-yield",
+    "mortgage",
+    "monitor",
+    "利率",
+    "贷款市场报价利率",
+    "国债收益率",
+    "房贷利率",
+    "bilingual",
+    "chinese",
+    "english",
+    "china-finance"
+  ],
   "language": "zh-CN / en (configurable)"
 }
