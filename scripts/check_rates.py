@@ -1,238 +1,246 @@
 #!/usr/bin/env python3
 """
-利率监测脚本 - 检查银行存款利率和国债收益率变动
-每日执行，有变化立即推送微信通知
+Chinese Interest Rate Monitor - Rate Check Script
+追踪中国利率数据，对比历史，有变化则输出
 """
 
 import json
-import re
 import sys
-from datetime import datetime, date
-from pathlib import Path
+import os
+from datetime import datetime
 
-# 路径配置
-SCRIPT_DIR = Path(__file__).parent
-SKILL_DIR = SCRIPT_DIR.parent
-DATA_FILE = SKILL_DIR / "data" / "rates.json"
+DATA_FILE = os.path.join(os.path.dirname(__file__), '../data/rates.json')
 
-def load_rates():
-    """读取历史利率数据"""
-    if DATA_FILE.exists():
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return None
+def load_current_rates():
+    """从文件加载当前利率数据"""
+    if not os.path.exists(DATA_FILE):
+        return {}
+    with open(DATA_FILE, 'r', encoding='utf-8') as f:
+        return json.load(f)
 
 def save_rates(data):
-    """保存今日利率数据"""
-    DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
+    """保存利率数据到文件"""
+    os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
+    with open(DATA_FILE, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
-def extract_percentage(text):
-    """从文本中提取百分比数值"""
-    patterns = [
-        r'(\d+\.\d{2})%',
-        r'(\d+\.\d+)%',
-        r'(\d+\.?\d*)\s*%',
+def parse_rates_from_search(search_results):
+    """
+    从web_search结果中解析利率数值
+    返回提取到的利率字典
+    """
+    rates = {}
+    text = ' '.join(search_results).lower() if isinstance(search_results, list) else search_results.lower()
+    
+    # LPR 解析 (如 "1年期LPR 3.45%" 或 "LPR 1年期 3.45%")
+    lpr_patterns = [
+        r'1年[期]?lpr[:\s]*(\d+\.?\d*)%',
+        r'lpr.*1年[期]?[:\s]*(\d+\.?\d*)%',
+        r'贷款市场报价利率.*1年[期]?[:\s]*(\d+\.?\d*)%',
+        r'(\d+\.?\d*)%.*1年[期]?lpr',
     ]
-    for pattern in patterns:
-        match = re.search(pattern, text)
-        if match:
-            return match.group(1)
-    return None
+    for pattern in lpr_patterns:
+        import re
+        m = re.search(pattern, text)
+        if m:
+            rates['LPR_1Y'] = m.group(1)
+            break
+    
+    # 5年期LPR
+    lpr5_patterns = [
+        r'5年[期]?以上?lpr[:\s]*(\d+\.?\d*)%',
+        r'lpr.*5年[期]?以上?[:\s]*(\d+\.?\d*)%',
+        r'5年[期]?lpr[:\s]*(\d+\.?\d*)%',
+    ]
+    for pattern in lpr5_patterns:
+        import re
+        m = re.search(pattern, text)
+        if m:
+            rates['LPR_5Y'] = m.group(1)
+            break
+    
+    # 存款基准利率
+    deposit_patterns = [
+        r'一年[期]?定期.*?[:\s]*(\d+\.?\d*)%',
+        r'(\d+\.?\d*)%.*一年[期]?定期',
+    ]
+    for pattern in deposit_patterns:
+        import re
+        m = re.search(pattern, text)
+        if m:
+            rates['deposit_1Y'] = m.group(1)
+            break
+    
+    # 国债收益率 10年
+    bond10_patterns = [
+        r'10年[期]?国债.*?收益率[:\s]*(\d+\.?\d*)%',
+        r'10年[期]?收益率[:\s]*(\d+\.?\d*)%',
+    ]
+    for pattern in bond10_patterns:
+        import re
+        m = re.search(pattern, text)
+        if m:
+            rates['bond_10Y'] = m.group(1)
+            break
+    
+    return rates
 
-def format_change(old_val, new_val):
-    """计算变动值"""
-    if old_val == "" or new_val == "":
-        return ""
-    try:
-        diff = round(float(new_val) - float(old_val), 2)
-        if diff > 0:
-            return f"+{diff:.2f}%"
-        elif diff < 0:
-            return f"{diff:.2f}%"
-        else:
-            return "0.00%"
-    except:
-        return ""
-
-def parse_rates_from_search(search_output):
-    """从搜索结果文本中解析利率数据"""
-    results = {
-        "depositRates": {"1year": "", "3year": "", "5year": ""},
-        "bondYields": {"1year": "", "10year": ""}
+def compare_rates(old_data, new_rates):
+    """对比旧数据和新数据，返回变化"""
+    changes = []
+    categories = {
+        'depositRates': 'deposit',
+        'LPR': 'LPR',
+        'bondYields': 'bond',
+        'SHIBOR': 'SHIBOR',
+        'mortgageLPR': 'mortgage',
+        'OMO': 'OMO',
+        'RRR': 'RRR'
     }
     
-    # 解析搜索结果
-    text = str(search_output).lower()
+    for category, prefix in categories.items():
+        if category not in old_data:
+            old_data[category] = {}
+        if category not in new_rates:
+            new_rates[category] = {}
+        
+        for key in set(list(old_data[category].keys()) + list(new_rates.get(category, {}).keys())):
+            old_val = old_data[category].get(key, '')
+            new_val = new_rates.get(category, {}).get(key, '')
+            
+            if old_val and new_val and old_val != new_val:
+                try:
+                    old_num = float(old_val)
+                    new_num = float(new_val)
+                    diff = new_num - old_num
+                    diff_bp = round(diff * 100, 1)  # 转换为基点
+                    changes.append({
+                        'category': category,
+                        'key': key,
+                        'old': old_val,
+                        'new': new_val,
+                        'diff': f"{diff:+.2f}% ({diff_bp:+.0f}bp)"
+                    })
+                except:
+                    pass
     
-    # 1年期定期存款利率 - 常见关键词
-    for pattern in [
-        r'1年.*?定期.*?(\d+\.\d{2})%',
-        r'一年.*?定期.*?(\d+\.\d{2})%',
-        r'一年期.*?存款.*?(\d+\.\d{2})%',
-        r'定期1年.*?(\d+\.\d{2})%',
-    ]:
-        match = re.search(pattern, text)
-        if match:
-            results["depositRates"]["1year"] = match.group(1)
-            break
-    
-    # 3年期定期存款利率
-    for pattern in [
-        r'3年.*?定期.*?(\d+\.\d{2})%',
-        r'三年.*?定期.*?(\d+\.\d{2})%',
-        r'三年期.*?存款.*?(\d+\.\d{2})%',
-    ]:
-        match = re.search(pattern, text)
-        if match:
-            results["depositRates"]["3year"] = match.group(1)
-            break
-    
-    # 5年期定期存款利率
-    for pattern in [
-        r'5年.*?定期.*?(\d+\.\d{2})%',
-        r'五年.*?定期.*?(\d+\.\d{2})%',
-        r'五年期.*?存款.*?(\d+\.\d{2})%',
-    ]:
-        match = re.search(pattern, text)
-        if match:
-            results["depositRates"]["5year"] = match.group(1)
-            break
-    
-    # 1年期国债收益率
-    for pattern in [
-        r'1年.*?国债.*?(\d+\.\d{2})%',
-        r'一年.*?国债.*?收益率.*?(\d+\.\d{2})%',
-        r'国债1年.*?(\d+\.\d{2})%',
-    ]:
-        match = re.search(pattern, text)
-        if match:
-            results["bondYields"]["1year"] = match.group(1)
-            break
-    
-    # 10年期国债收益率
-    for pattern in [
-        r'10年.*?国债.*?(\d+\.\d{2})%',
-        r'十年.*?国债.*?收益率.*?(\d+\.\d{2})%',
-        r'国债10年.*?(\d+\.\d{2})%',
-        r'10y.*?国债.*?(\d+\.\d{2})%',
-    ]:
-        match = re.search(pattern, text)
-        if match:
-            results["bondYields"]["10year"] = match.group(1)
-            break
-    
-    return results
+    return changes
 
-def compare_and_build_message(old_data, new_data):
-    """比较新旧数据，有变化则构建通知消息"""
-    changes = []
+def format_notification(changes, new_data):
+    """格式化通知消息"""
+    today = datetime.now().strftime('%Y-%m-%d %H:%M')
     
-    # 检查存款利率变动
-    deposit_items = [
-        ("1年期", old_data.get("depositRates", {}).get("1year", ""), 
-               new_data.get("depositRates", {}).get("1year", "")),
-        ("3年期", old_data.get("depositRates", {}).get("3year", ""), 
-               new_data.get("depositRates", {}).get("3year", "")),
-        ("5年期", old_data.get("depositRates", {}).get("5year", ""), 
-               new_data.get("depositRates", {}).get("5year", "")),
-    ]
+    msg = f"📊 中国利率变动日报 | {today}\n\n"
     
-    # 检查国债收益率变动
-    bond_items = [
-        ("1年期", old_data.get("bondYields", {}).get("1year", ""), 
-               new_data.get("bondYields", {}).get("1year", "")),
-        ("10年期", old_data.get("bondYields", {}).get("10year", ""), 
-               new_data.get("bondYields", {}).get("10year", "")),
-    ]
+    # 按类别分组
+    by_category = {}
+    for c in changes:
+        cat = c['category']
+        if cat not in by_category:
+            by_category[cat] = []
+        by_category[cat].append(c)
     
-    has_changes = False
-    deposit_changes = []
-    bond_changes = []
+    # 存款利率
+    if 'depositRates' in by_category:
+        msg += "🏦 银行存款利率（基准）\n"
+        for c in by_category['depositRates']:
+            label = {'1year': '1年', '3year': '3年', '5year': '5年'}.get(c['key'], c['key'])
+            msg += f"- {label}: {c['new']}% ({c['diff']})\n"
+        msg += "\n"
     
-    for name, old_val, new_val in deposit_items:
-        if new_val and new_val != old_val:
-            change = format_change(old_val, new_val)
-            deposit_changes.append(f"- {name}: {new_val}% （{change}）")
-            has_changes = True
+    # LPR
+    if 'LPR' in by_category:
+        msg += "📊 LPR 贷款市场报价利率\n"
+        for c in by_category['LPR']:
+            label = {'1year': '1年期', '5yearPlus': '5年期以上'}.get(c['key'], c['key'])
+            msg += f"- {label}: {c['new']}% ({c['diff']})\n"
+        msg += "\n"
     
-    for name, old_val, new_val in bond_items:
-        if new_val and new_val != old_val:
-            change = format_change(old_val, new_val)
-            bond_changes.append(f"- {name}: {new_val}% （{change}）")
-            has_changes = True
+    # 国债
+    if 'bondYields' in by_category:
+        msg += "📉 国债收益率\n"
+        for c in by_category['bondYields']:
+            label = {'1year': '1年', '3year': '3年', '10year': '10年'}.get(c['key'], c['key'])
+            msg += f"- {label}: {c['new']}% ({c['diff']})\n"
+        msg += "\n"
     
-    if not has_changes:
-        return None
+    # SHIBOR
+    if 'SHIBOR' in by_category:
+        msg += "💧 SHIBOR 银行间拆借利率\n"
+        for c in by_category['SHIBOR']:
+            label = {'ON': 'O/N隔夜', '1W': '1W', '1M': '1M', '3M': '3M'}.get(c['key'], c['key'])
+            msg += f"- {label}: {c['new']}% ({c['diff']})\n"
+        msg += "\n"
     
-    # 构建消息
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    message = f"📊 利率变动提醒 | 北京时间 {now}\n\n🏦 银行存款利率\n"
+    # 房贷
+    if 'mortgageLPR' in by_category:
+        msg += "🏠 房贷利率\n"
+        for c in by_category['mortgageLPR']:
+            msg += f"- 5年期以上LPR: {c['new']}% ({c['diff']})\n"
+        msg += "\n"
     
-    if deposit_changes:
-        message += "\n".join(deposit_changes) + "\n"
-    else:
-        message += "（无变动）\n"
+    # 公开市场操作
+    if 'OMO' in by_category:
+        msg += "🔄 公开市场操作利率\n"
+        for c in by_category['OMO']:
+            label = {'repo7d': '7天逆回购', 'repo14d': '14天逆回购', 'MLF1Y': 'MLF 1年'}.get(c['key'], c['key'])
+            msg += f"- {label}: {c['new']}% ({c['diff']})\n"
+        msg += "\n"
     
-    message += "\n📈 国债收益率\n"
-    if bond_changes:
-        message += "\n".join(bond_changes) + "\n"
-    else:
-        message += "（无变动）\n"
+    # 存款准备金率
+    if 'RRR' in by_category:
+        msg += "💰 存款准备金率\n"
+        for c in by_category['RRR']:
+            label = {'large': '大型机构', 'small': '小型机构'}.get(c['key'], c['key'])
+            msg += f"- {label}: {c['new']}% ({c['diff']})\n"
+        msg += "\n"
     
-    message += "\n⚠️ 请注意利率变化，及时调整您的理财策略"
+    msg += "---\n"
+    msg += "数据来源：中国人民银行、全国银行间同业拆借中心、中国债券信息网\n"
     
-    return message
+    return msg
 
 def main():
-    """主函数"""
-    print("=" * 50)
-    print("🏦 利率监测开始执行...")
-    print("=" * 50)
+    """
+    主流程：
+    1. 读取历史数据
+    2. 接收新的利率数据（通过命令行参数）
+    3. 对比变化
+    4. 有变化则输出通知
+    5. 更新数据文件
+    """
+    old_data = load_current_rates()
     
-    # 1. 读取历史数据
-    old_rates = load_rates()
-    print(f"📂 历史数据: {old_rates}")
-    
-    # 2. 获取今日数据（从搜索结果解析）
-    # 这里需要通过外部调用 web_search 获取数据
-    # 脚本接收命令行参数传入搜索结果
-    
+    # 从命令行参数获取新数据（JSON格式）
     if len(sys.argv) > 1:
-        search_results = " ".join(sys.argv[1:])
-        new_rates = parse_rates_from_search(search_results)
+        try:
+            new_data = json.loads(sys.argv[1])
+        except:
+            print("Error: Invalid JSON input")
+            sys.exit(1)
     else:
-        print("⚠️ 未提供搜索结果参数，请提供 web_search 返回的数据")
-        return
+        # 无参数时，读取上次保存的数据作为"新数据"（演示用）
+        new_data = old_data.copy()
+        new_data['updateDate'] = datetime.now().strftime('%Y-%m-%d')
     
-    print(f"📥 今日数据: {new_rates}")
+    # 对比变化
+    changes = compare_rates(old_data, new_data)
     
-    # 3. 对比数据
-    if old_rates:
-        message = compare_and_build_message(old_rates, new_rates)
-        if message:
-            print("\n📨 检测到变动，准备发送通知...")
-            print("-" * 50)
-            print(message)
-            print("-" * 50)
-            # 输出标记，供外部捕获
-            print(f"\n[NOTIFY]\n{message}\n[/NOTIFY]")
-        else:
-            print("\n✅ 今日利率无变动，不发送通知")
-    else:
-        print("\n📝 首次运行，初始化数据...")
+    # 有变化则输出通知
+    if changes:
+        notification = format_notification(changes, new_data)
+        print("[NOTIFY]")
+        print(notification)
+        print("[/NOTIFY]")
     
-    # 4. 更新数据文件
-    today = date.today().strftime("%Y-%m-%d")
-    new_data = {
-        "updateDate": today,
-        "depositRates": new_rates.get("depositRates", {}),
-        "bondYields": new_rates.get("bondYields", {})
-    }
+    # 更新数据文件
+    new_data['updateDate'] = datetime.now().strftime('%Y-%m-%d')
     save_rates(new_data)
-    print(f"\n💾 数据已保存至: {DATA_FILE}")
-    print("=" * 50)
+    
+    if not changes:
+        print("[OK] No changes detected. Data updated.")
+    else:
+        print(f"[OK] {len(changes)} rate(s) changed. Data updated.")
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

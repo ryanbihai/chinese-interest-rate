@@ -1,10 +1,10 @@
 {
   "ownerId": "kn75dvek1dkfz0r0xwdp4xtc2983qg44",
   "slug": "chinese-interest-rate",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "publishedAt": 1774826000000,
   "namespace": "ryanbihai",
-  "changelog": "v1.0: 中文/英文利率监测工具，追踪银行存款利率和国债收益率，每日检查，变动即通知",
-  "tags": ["finance", "china", "interest-rate", "bank-deposit", "bond-yield", "monitor", "利率", "国债"],
+  "changelog": "v2.0: 扩展至9大类利率数据 - LPR、SHIBOR、存款准备金率、逆回购利率、房贷利率等",
+  "tags": ["finance", "china", "interest-rate", "LPR", "SHIBOR", "bank-deposit", "bond-yield", "mortgage", "monitor", "利率", "贷款市场报价利率", "国债收益率", "房贷利率", "SHIBOR", "公开市场操作"],
   "language": "zh-CN, en"
 }
